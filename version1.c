@@ -1,110 +1,156 @@
-/*
-*  Video Lecture: 22
-*  Programmer: Arif Butt
-*  Course: System Programming with Linux
-*  myshellv1.c: 
-*  main() displays a prompt, receives a string from keyboard, pass it to tokenize()
-*  tokenize() allocates dynamic memory and tokenize the string and return a char**
-*  main() then pass the tokenized string to execute() which calls fork and exec
-*  finally main() again displays the prompt and waits for next command string
-*   Limitations:
-*   if user press enter without any input the program gives sigsegv 
-*   if user give only spaces and press enter it gives sigsegv
-*   if user press ctrl+D it give sigsegv
-*   however if you give spaces and give a cmd and press enter it works
-*/
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <limits.h>     // For defining the maximum path length (PATH_MAX)
+#include <pwd.h>        // For retrieving the username
 
-#define MAX_LEN 512
-#define MAXARGS 10
-#define ARGLEN 30
-#define PROMPT "PUCITshell:- "
+#define MAX_LEN 512     // Maximum length of a command input
+#define MAXARGS 10      // Maximum number of arguments allowed
+#define ARGLEN 30       // Maximum length of each argument
 
-int execute(char* arglist[]);
-char** tokenize(char* cmdline);
-char* read_cmd(char*, FILE*);
+// Function declarations
+int execute(char* arglist[]);            // Function to fork and execute the command
+char** tokenize(char* cmdline);          // Function to tokenize the command line input into arguments
+char* read_cmd(char*, FILE*);            // Function to read the command input from the user
+
 int main(){
-   char *cmdline;
-   char** arglist;
-   char* prompt = PROMPT;   
-   while((cmdline = read_cmd(prompt,stdin)) != NULL){
-      if((arglist = tokenize(cmdline)) != NULL){
-            execute(arglist);
-       //  need to free arglist
-         for(int j=0; j < MAXARGS+1; j++)
-	         free(arglist[j]);
-         free(arglist);
-         free(cmdline);
+   char *cmdline;                        // Pointer to hold the command input
+   char** arglist;                       // Pointer to hold the list of tokenized arguments
+   char prompt[MAX_LEN];                 // Array to store the dynamic prompt string
+   char hostname[HOST_NAME_MAX];         // Array to store the machine (host) name
+   char cwd[PATH_MAX];                   // Array to store the current working directory (cwd)
+   char* username = getenv("USER");      // Retrieve the username from the environment variables
+
+   // Ensure that username is not NULL, set it to "unknown" if not found
+   if (username == NULL) {
+       username = "unknown";
+   }
+
+   gethostname(hostname, HOST_NAME_MAX); // Get the hostname of the machine
+
+   // Main loop that runs continuously until the user exits (e.g., with Ctrl+D)
+   while(1) {
+      // Get the current working directory, and format the prompt string
+      if (getcwd(cwd, sizeof(cwd)) != NULL) {
+         // Format the prompt to display: "PUCIT-shell (username@machinename) - [current_directory] :"
+         snprintf(prompt, sizeof(prompt), "PUCIT-shell (%s@%s) - [%s$] :", username, hostname, cwd);
+      } else {
+         // If there’s an error getting the current directory, print an error message
+         perror("getcwd() error");
+         return 1; // Exit with error code
       }
-  }//end of while loop
+
+      // Read the command from the user input
+      cmdline = read_cmd(prompt, stdin);
+      
+      // If Ctrl+D (EOF) is pressed, cmdline will be NULL and the shell will exit
+      if (cmdline == NULL) {
+         break;
+      }
+      
+      // Tokenize the command line input into arguments, and execute the command
+      if((arglist = tokenize(cmdline)) != NULL){
+            execute(arglist);  // Call the execute function to fork and run the command
+            
+            // Free the dynamically allocated memory for arguments
+            for(int j = 0; j < MAXARGS+1; j++)
+               free(arglist[j]);
+            free(arglist);
+            free(cmdline);  // Free the memory allocated for the command line
+      }
+   }
+
    printf("\n");
-   return 0;
+   return 0;  // Return success
 }
+
+// Function to execute the command by forking and using execvp
 int execute(char* arglist[]){
    int status;
-   int cpid = fork();
+   int cpid = fork();  // Fork a new process
    switch(cpid){
       case -1:
+         // If fork fails, print an error message and exit with error code
          perror("fork failed");
-	      exit(1);
+         exit(1);
       case 0:
-	      execvp(arglist[0], arglist);
- 	      perror("Command not found...");
-	      exit(1);
+         // Child process: execute the command using execvp
+         execvp(arglist[0], arglist);
+         // If execvp fails (command not found), print an error and exit
+         perror("Command not found...");
+         exit(1);
       default:
-	      waitpid(cpid, &status, 0);
-         printf("child exited with status %d \n", status >> 8);
+         // Parent process: wait for the child process to finish and get its exit status
+         waitpid(cpid, &status, 0);
+         printf("child exited with status %d \n", status >> 8);  // Print exit status of child
          return 0;
    }
 }
-char** tokenize(char* cmdline){
-//allocate memory
-   char** arglist = (char**)malloc(sizeof(char*)* (MAXARGS+1));
-   for(int j=0; j < MAXARGS+1; j++){
-	   arglist[j] = (char*)malloc(sizeof(char)* ARGLEN);
-      bzero(arglist[j],ARGLEN);
-    }
-   if(cmdline[0] == '\0')//if user has entered nothing and pressed enter key
-      return NULL;
-   int argnum = 0; //slots used
-   char*cp = cmdline; // pos in string
-   char*start;
-   int len;
-   while(*cp != '\0'){
-      while(*cp == ' ' || *cp == '\t') //skip leading spaces
-          cp++;
-      start = cp; //start of the word
-      len = 1;
-      //find the end of the word
-      while(*++cp != '\0' && !(*cp ==' ' || *cp == '\t'))
-         len++;
-      strncpy(arglist[argnum], start, len);
-      arglist[argnum][len] = '\0';
-      argnum++;
-   }
-   arglist[argnum] = NULL;
-   return arglist;
-}      
 
-char* read_cmd(char* prompt, FILE* fp){
-   printf("%s", prompt);
-  int c; //input character
-   int pos = 0; //position of character in cmdline
-   char* cmdline = (char*) malloc(sizeof(char)*MAX_LEN);
-   while((c = getc(fp)) != EOF){
-       if(c == '\n')
-	  break;
-       cmdline[pos++] = c;
+// Function to tokenize the input command line into arguments
+char** tokenize(char* cmdline){
+   // Allocate memory for argument list, with room for MAXARGS arguments
+   char** arglist = (char**)malloc(sizeof(char*) * (MAXARGS+1));
+   for(int j = 0; j < MAXARGS+1; j++){
+       arglist[j] = (char*)malloc(sizeof(char) * ARGLEN); // Allocate memory for each argument
+       bzero(arglist[j], ARGLEN); // Initialize the argument memory with zeros
    }
-//these two lines are added, in case user press ctrl+d to exit the shell
-   if(c == EOF && pos == 0) 
+
+   // If the user enters an empty command (just presses Enter), return NULL
+   if(cmdline[0] == '\0')
       return NULL;
-   cmdline[pos] = '\0';
-   return cmdline;
+
+   int argnum = 0;  // Variable to count how many arguments have been parsed
+   char* cp = cmdline;  // Pointer to track the current position in the command line string
+   char* start;         // Pointer to mark the start of each argument
+   int len;             // Length of each argument
+
+   // Loop through the command line string to tokenize it
+   while(*cp != '\0'){
+      // Skip any leading spaces or tabs
+      while(*cp == ' ' || *cp == '\t')
+          cp++;
+      
+      start = cp;  // Mark the start of the argument
+      len = 1;
+      
+      // Find the end of the argument (i.e., next space or tab)
+      while(*++cp != '\0' && !(*cp == ' ' || *cp == '\t'))
+         len++;
+      
+      // Copy the argument into the argument list
+      strncpy(arglist[argnum], start, len);
+      arglist[argnum][len] = '\0';  // Null-terminate the string
+      argnum++;  // Increment the argument count
+   }
+
+   // The last element in the argument list should be NULL, marking the end of arguments
+   arglist[argnum] = NULL;
+   return arglist;  // Return the list of arguments
 }
+
+// Function to read the command input from the user
+char* read_cmd(char* prompt, FILE* fp){
+   printf("%s", prompt);  // Print the shell prompt
+   int c;  // Variable to hold each input character
+   int pos = 0;  // Position in the command line
+   char* cmdline = (char*) malloc(sizeof(char) * MAX_LEN);  // Allocate memory for the command line
+
+   // Read characters from user input until Enter (newline) or EOF (Ctrl+D)
+   while((c = getc(fp)) != EOF){
+       if(c == '\n')  // If Enter is pressed, stop reading input
+          break;
+       cmdline[pos++] = c;  // Add the character to the command line
+   }
+
+   // If EOF is encountered and no input was entered, return NULL (exit the shell)
+   if(c == EOF && pos == 0)
+      return NULL;
+
+   cmdline[pos] = '\0';  // Null-terminate the command string
+   return cmdline;  // Return the command line
+}
+
