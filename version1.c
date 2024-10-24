@@ -11,12 +11,19 @@
 #define MAXARGS 10      // Maximum number of arguments allowed
 #define ARGLEN 30       // Maximum length of each argument
 
+// ANSI color codes for terminal output
+#define COLOR_RESET   "\033[0m"        // Resets to default color
+#define COLOR_RED     "\033[31m"       // Red color for errors or important text
+#define COLOR_GREEN   "\033[32m"       // Green color for username
+#define COLOR_BLUE    "\033[34m"       // Blue color for hostname
+#define COLOR_CYAN    "\033[36m"       // Cyan color for the current working directory (PWD)
+
 // Function declarations
 int execute(char* arglist[]);            // Function to fork and execute the command
 char** tokenize(char* cmdline);          // Function to tokenize the command line input into arguments
 char* read_cmd(char*, FILE*);            // Function to read the command input from the user
 
-int main(){
+int main() {
    char *cmdline;                        // Pointer to hold the command input
    char** arglist;                       // Pointer to hold the list of tokenized arguments
    char prompt[MAX_LEN];                 // Array to store the dynamic prompt string
@@ -35,8 +42,13 @@ int main(){
    while(1) {
       // Get the current working directory, and format the prompt string
       if (getcwd(cwd, sizeof(cwd)) != NULL) {
-         // Format the prompt to display: "PUCIT-shell (username@machinename) - [current_directory] :"
-         snprintf(prompt, sizeof(prompt), "PUCIT-shell (%s@%s) - [%s$] :", username, hostname, cwd);
+         // Format the prompt with colors using ANSI escape codes
+         snprintf(prompt, sizeof(prompt), 
+            COLOR_RED "PUCITshell " COLOR_RESET  // PUCITshell in red
+            "(" COLOR_GREEN "%s" COLOR_RESET     // Username in green
+            "@" COLOR_GREEN "%s" COLOR_RESET      // Hostname in blue
+            ")-[" COLOR_CYAN "%s" COLOR_RESET "] :", 
+            username, hostname, cwd);
       } else {
          // If there’s an error getting the current directory, print an error message
          perror("getcwd() error");
@@ -52,11 +64,11 @@ int main(){
       }
       
       // Tokenize the command line input into arguments, and execute the command
-      if((arglist = tokenize(cmdline)) != NULL){
+      if ((arglist = tokenize(cmdline)) != NULL) {
             execute(arglist);  // Call the execute function to fork and run the command
             
             // Free the dynamically allocated memory for arguments
-            for(int j = 0; j < MAXARGS+1; j++)
+            for (int j = 0; j < MAXARGS+1; j++)
                free(arglist[j]);
             free(arglist);
             free(cmdline);  // Free the memory allocated for the command line
@@ -68,10 +80,10 @@ int main(){
 }
 
 // Function to execute the command by forking and using execvp
-int execute(char* arglist[]){
+int execute(char* arglist[]) {
    int status;
    int cpid = fork();  // Fork a new process
-   switch(cpid){
+   switch (cpid) {
       case -1:
          // If fork fails, print an error message and exit with error code
          perror("fork failed");
@@ -91,16 +103,16 @@ int execute(char* arglist[]){
 }
 
 // Function to tokenize the input command line into arguments
-char** tokenize(char* cmdline){
+char** tokenize(char* cmdline) {
    // Allocate memory for argument list, with room for MAXARGS arguments
-   char** arglist = (char**)malloc(sizeof(char*) * (MAXARGS+1));
-   for(int j = 0; j < MAXARGS+1; j++){
+   char** arglist = (char**)malloc(sizeof(char*) * (MAXARGS + 1));
+   for (int j = 0; j < MAXARGS + 1; j++) {
        arglist[j] = (char*)malloc(sizeof(char) * ARGLEN); // Allocate memory for each argument
        bzero(arglist[j], ARGLEN); // Initialize the argument memory with zeros
    }
 
    // If the user enters an empty command (just presses Enter), return NULL
-   if(cmdline[0] == '\0')
+   if (cmdline[0] == '\0')
       return NULL;
 
    int argnum = 0;  // Variable to count how many arguments have been parsed
@@ -109,16 +121,16 @@ char** tokenize(char* cmdline){
    int len;             // Length of each argument
 
    // Loop through the command line string to tokenize it
-   while(*cp != '\0'){
+   while (*cp != '\0') {
       // Skip any leading spaces or tabs
-      while(*cp == ' ' || *cp == '\t')
+      while (*cp == ' ' || *cp == '\t')
           cp++;
       
       start = cp;  // Mark the start of the argument
       len = 1;
       
       // Find the end of the argument (i.e., next space or tab)
-      while(*++cp != '\0' && !(*cp == ' ' || *cp == '\t'))
+      while (*++cp != '\0' && !(*cp == ' ' || *cp == '\t'))
          len++;
       
       // Copy the argument into the argument list
@@ -133,24 +145,23 @@ char** tokenize(char* cmdline){
 }
 
 // Function to read the command input from the user
-char* read_cmd(char* prompt, FILE* fp){
+char* read_cmd(char* prompt, FILE* fp) {
    printf("%s", prompt);  // Print the shell prompt
    int c;  // Variable to hold each input character
    int pos = 0;  // Position in the command line
-   char* cmdline = (char*) malloc(sizeof(char) * MAX_LEN);  // Allocate memory for the command line
+   char* cmdline = (char*)malloc(sizeof(char) * MAX_LEN);  // Allocate memory for the command line
 
    // Read characters from user input until Enter (newline) or EOF (Ctrl+D)
-   while((c = getc(fp)) != EOF){
-       if(c == '\n')  // If Enter is pressed, stop reading input
+   while ((c = getc(fp)) != EOF) {
+       if (c == '\n')  // If Enter is pressed, stop reading input
           break;
        cmdline[pos++] = c;  // Add the character to the command line
    }
 
    // If EOF is encountered and no input was entered, return NULL (exit the shell)
-   if(c == EOF && pos == 0)
+   if (c == EOF && pos == 0)
       return NULL;
 
    cmdline[pos] = '\0';  // Null-terminate the command string
    return cmdline;  // Return the command line
 }
-
