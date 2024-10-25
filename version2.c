@@ -176,17 +176,6 @@ char** tokenize(char* cmdline) {
         argnum++;
     }
     arglist[argnum] = NULL;
-
-    // Remove redirection symbols from argument list
-    for (int i = 0; arglist[i] != NULL; i++) {
-        if (strcmp(arglist[i], "<") == 0 || strcmp(arglist[i], ">") == 0) {
-            // Shift arguments to the left to remove the symbol
-            for (int j = i; arglist[j] != NULL; j++) {
-                arglist[j] = arglist[j + 1];
-            }
-            i--; // Stay on the current index for the next loop iteration
-        }
-    }
     return arglist;
 }
 
@@ -204,3 +193,4 @@ char* read_cmd(char* prompt, FILE* fp) {
     cmdline[pos] = '\0';
     return cmdline;
 }
+
