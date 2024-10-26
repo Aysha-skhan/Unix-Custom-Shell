@@ -66,12 +66,6 @@ int execute(char *arglist[]) {
     char **cmdlist[MAXARGS];
     parse_redirects_and_pipes(arglist, &infile, &outfile, &is_pipe, cmdlist);
 
-    // Check if infile and outfile are the same
-    if (infile == outfile) {
-        fprintf(stderr, "Input file cannot be the same as output file\n");
-        return -1; // Early return on error
-    }
-
     if (is_pipe) {
         int fd[2];
         int status;
@@ -114,34 +108,29 @@ void parse_redirects_and_pipes(char **args, int *infile, int *outfile, int *is_p
 
     for (i = 0; args[i] != NULL; i++) {
         if (strcmp(args[i], "<") == 0) {
-            // Open input file and update infile descriptor
             *infile = open(args[++i], O_RDONLY);
             if (*infile < 0) {
                 perror("Cannot open input file");
                 return;
             }
         } else if (strcmp(args[i], ">") == 0) {
-            // Open output file and update outfile descriptor
             *outfile = open(args[++i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (*outfile < 0) {
                 perror("Cannot open output file");
                 return;
             }
         } else if (strcmp(args[i], "|") == 0) {
-            // Handle pipes by moving to the next command in cmdlist
-            cmdlist[cmd_idx][arg_idx] = NULL; // Null-terminate the current command
+            cmdlist[cmd_idx][arg_idx] = NULL;
             cmd_idx++;
             cmdlist[cmd_idx] = malloc(MAXARGS * sizeof(char*));
             arg_idx = 0;
             *is_pipe = 1;
         } else {
-            // Add argument to the current command
             cmdlist[cmd_idx][arg_idx++] = args[i];
         }
     }
-    // Null-terminate the last command
     cmdlist[cmd_idx][arg_idx] = NULL;
-    cmdlist[cmd_idx + 1] = NULL; // Ensure the last command is null-terminated
+    cmdlist[cmd_idx + 1] = NULL;
 }
 
 char** tokenize(char* cmdline) {
@@ -168,7 +157,6 @@ char** tokenize(char* cmdline) {
             len++;
         }
 
-        // Ensure we don't exceed the argument length
         if (len >= ARGLEN) len = ARGLEN - 1;
 
         strncpy(arglist[argnum], start, len);
@@ -193,4 +181,3 @@ char* read_cmd(char* prompt, FILE* fp) {
     cmdline[pos] = '\0';
     return cmdline;
 }
-
