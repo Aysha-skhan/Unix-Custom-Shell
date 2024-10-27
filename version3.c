@@ -5,175 +5,170 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <signal.h>
 #include <limits.h>
 #include <pwd.h>
-#include <signal.h>
 
 #define MAX_LEN 512
 #define MAXARGS 10
-#define ARGLEN 30
 
 // ANSI color codes for prompt
 #define COLOR_RESET "\033[0m"
 #define COLOR_RED "\033[31m"
 #define COLOR_GREEN "\033[32m"
-#define COLOR_BLUE "\033[34m"
 #define COLOR_CYAN "\033[36m"
 
 // Function declarations
-int execute(char ***cmdlist, int infile, int outfile, int background);
-char **tokenize(char *cmdline);
-char *read_cmd(char *, FILE *);
-void parse_command(char *arglist[], char ***cmdlist, int *background, int *infile, int *outfile);
 void handle_sigchld(int sig);
+char **parse_input(char *input);
+void execute_pipes(char ***cmdlist, int infile, int outfile, int background);
+char ***parse_commands(char *input, int *background);
+void display_prompt();
 
-int main() {
-    signal(SIGCHLD, handle_sigchld);  // Handle SIGCHLD to prevent zombies
+// Signal handler to reap zombie processes
+void handle_sigchld(int sig) {
+    int saved_errno = errno;
+    pid_t pid;
+    int status;
 
-    char *cmdline;
-    char **arglist;
-    char prompt[MAX_LEN];
+    // Reap all zombie processes
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        printf("[Process %d exited with status %d]\n", pid, WEXITSTATUS(status));
+        fflush(stdout);  // Ensure prompt is displayed immediately
+    }
+    errno = saved_errno;
+}
+
+// Tokenize the command into arguments
+char **parse_input(char *input) {
+    char **command = malloc(MAXARGS * sizeof(char *));
+    char *token;
+    int index = 0;
+
+    token = strtok(input, " \t\n");
+    while (token != NULL && index < MAXARGS - 1) {
+        command[index++] = strdup(token);
+        token = strtok(NULL, " \t\n");
+    }
+    command[index] = NULL;
+    return command;
+}
+
+// Parse commands with pipes and detect background processes
+char ***parse_commands(char *input, int *background) {
+    char ***cmdlist = malloc(MAXARGS * sizeof(char **));
+    char *cmd;
+    int cmd_idx = 0;
+
+    cmd = strtok(input, "|");
+    while (cmd != NULL) {
+        char **args = parse_input(cmd);
+        cmdlist[cmd_idx++] = args;
+        cmd = strtok(NULL, "|");
+    }
+    cmdlist[cmd_idx] = NULL;
+
+    // Check if the last command is a background process (`&`)
+    for (int i = 0; cmdlist[cmd_idx - 1][i] != NULL; i++) {
+        if (strcmp(cmdlist[cmd_idx - 1][i], "&") == 0) {
+            *background = 1;
+            free(cmdlist[cmd_idx - 1][i]);  // Remove '&' from command
+            cmdlist[cmd_idx - 1][i] = NULL;
+        }
+    }
+
+    return cmdlist;
+}
+
+// Execute commands with pipes, redirection, and background process handling
+void execute_pipes(char ***cmdlist, int infile, int outfile, int background) {
+    int fd[2], in = infile, i = 0;
+    pid_t pid;
+
+    while (cmdlist[i] != NULL) {
+        pipe(fd);  // Create a pipe
+
+        if ((pid = fork()) == 0) {  // Child process
+            if (in != 0) {
+                dup2(in, STDIN_FILENO);  // Redirect input
+                close(in);
+            }
+            if (cmdlist[i + 1] != NULL) {
+                dup2(fd[1], STDOUT_FILENO);  // Redirect output to the pipe
+            } else if (outfile != 1) {
+                dup2(outfile, STDOUT_FILENO);  // Redirect output to the file
+                close(outfile);
+            }
+            close(fd[0]);  // Close the unused end of the pipe
+            execvp(cmdlist[i][0], cmdlist[i]);  // Execute the command
+            perror("execvp failed");  // If execvp fails
+            exit(1);
+        } else if (pid > 0) {  // Parent process
+            close(fd[1]);  // Close write end of the pipe
+            in = fd[0];  // Save read end for the next command
+
+            if (!background) {
+                waitpid(pid, NULL, 0);  // Wait for the child process if not in background
+            }
+        } else {
+            perror("fork failed");
+            exit(1);
+        }
+        i++;
+    }
+}
+
+// Display the custom prompt
+void display_prompt() {
     char hostname[HOST_NAME_MAX];
     char cwd[PATH_MAX];
     char *username = getenv("USER");
     if (username == NULL) username = "unknown";
 
-    gethostname(hostname, HOST_NAME_MAX);
+    gethostname(hostname, sizeof(hostname));  // Get the hostname
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {  // Get the current directory
+        printf(COLOR_RED "PUCITshell " COLOR_RESET
+               "(" COLOR_GREEN "%s" COLOR_RESET
+               "@" COLOR_GREEN "%s" COLOR_RESET
+               ")-[" COLOR_CYAN "%s" COLOR_RESET "] : ", 
+               username, hostname, cwd);
+    } else {
+        perror("getcwd error");
+    }
+    fflush(stdout);  // Ensure the prompt is displayed immediately
+}
+
+int main() {
+    struct sigaction sa;
+    sa.sa_handler = &handle_sigchld;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);  // Set up SIGCHLD handler
+
+    char input[MAX_LEN];
+    char ***cmdlist;
+    int background;
 
     while (1) {
-        if (getcwd(cwd, sizeof(cwd)) != NULL) {
-            snprintf(prompt, sizeof(prompt),
-                     COLOR_RED "PUCITshell " COLOR_RESET
-                     "(" COLOR_GREEN "%s" COLOR_RESET
-                     "@" COLOR_GREEN "%s" COLOR_RESET
-                     ")-[" COLOR_CYAN "%s" COLOR_RESET "] : ",
-                     username, hostname, cwd);
-        } else {
-            perror("getcwd() error");
-            return 1;
-        }
+        display_prompt();  // Show the custom prompt
 
-        cmdline = read_cmd(prompt, stdin);
-        if (cmdline == NULL) break;
+        if (!fgets(input, MAX_LEN, stdin)) break;  // Read input
+        input[strlen(input) - 1] = '\0';  // Remove newline character
 
-        arglist = tokenize(cmdline);
-        if (arglist != NULL) {
-            int background = 0;
-            int infile = 0, outfile = 1;
-            char ***cmdlist = malloc((MAXARGS + 1) * sizeof(char **));
-            parse_command(arglist, cmdlist, &background, &infile, &outfile);
-            execute(cmdlist, infile, outfile, background);
+        background = 0;  // Reset background flag
+        cmdlist = parse_commands(input, &background);  // Parse commands
+        execute_pipes(cmdlist, 0, 1, background);  // Execute commands
 
-            // Close redirection files
-            if (infile != 0) close(infile);
-            if (outfile != 1) close(outfile);
-
-            // Free allocated memory
-            for (int i = 0; cmdlist[i] != NULL; i++) {
-                for (int j = 0; cmdlist[i][j] != NULL; j++) free(cmdlist[i][j]);
-                free(cmdlist[i]);
+        // Free allocated memory
+        for (int i = 0; cmdlist[i] != NULL; i++) {
+            for (int j = 0; cmdlist[i][j] != NULL; j++) {
+                free(cmdlist[i][j]);
             }
-            free(cmdlist);
-            free(cmdline);
+            free(cmdlist[i]);
         }
+        free(cmdlist);
     }
     printf("\n");
     return 0;
-}
-
-// Signal handler to reap zombie processes
-void handle_sigchld(int sig) {
-    while (waitpid(-1, NULL, WNOHANG) > 0);
-}
-
-// Parse command with redirection and pipes
-void parse_command(char *arglist[], char ***cmdlist, int *background, int *infile, int *outfile) {
-    int cmd_idx = 0, arg_idx = 0;
-    cmdlist[cmd_idx] = malloc((MAXARGS + 1) * sizeof(char *));
-
-    for (int i = 0; arglist[i] != NULL; i++) {
-        if (strcmp(arglist[i], "|") == 0) {
-            cmdlist[cmd_idx][arg_idx] = NULL;
-            cmd_idx++;
-            cmdlist[cmd_idx] = malloc((MAXARGS + 1) * sizeof(char *));
-            arg_idx = 0;
-        } else if (strcmp(arglist[i], "<") == 0) {
-            *infile = open(arglist[++i], O_RDONLY);
-            if (*infile < 0) {
-                perror("Cannot open input file");
-                exit(1);
-            }
-        } else if (strcmp(arglist[i], ">") == 0) {
-            *outfile = open(arglist[++i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (*outfile < 0) {
-                perror("Cannot open output file");
-                exit(1);
-            }
-        } else if (strcmp(arglist[i], "&") == 0) {
-            *background = 1;
-        } else {
-            cmdlist[cmd_idx][arg_idx++] = strdup(arglist[i]);
-        }
-    }
-    cmdlist[cmd_idx][arg_idx] = NULL;
-    cmdlist[cmd_idx + 1] = NULL;
-}
-
-// Execute commands with pipes and redirection
-int execute(char ***cmdlist, int infile, int outfile, int background) {
-    int fd[2], in = infile, status;
-    pid_t pid;
-
-    for (int i = 0; cmdlist[i] != NULL; i++) {
-        pipe(fd);
-
-        if ((pid = fork()) == 0) {
-            if (in != 0) {
-                dup2(in, STDIN_FILENO);
-                close(in);
-            }
-            if (cmdlist[i + 1] != NULL) {
-                dup2(fd[1], STDOUT_FILENO);
-                close(fd[1]);
-            } else if (outfile != 1) {
-                dup2(outfile, STDOUT_FILENO);
-                close(outfile);
-            }
-            close(fd[0]);
-            execvp(cmdlist[i][0], cmdlist[i]);
-            perror("Command execution failed");
-            exit(1);
-        }
-        close(fd[1]);
-        in = fd[0];
-    }
-
-    if (!background) {
-        while (wait(&status) > 0);
-    } else {
-        printf("[Background] Process started with PID %d\n", pid);
-    }
-    return 0;
-}
-
-// Tokenize the command line into arguments
-char **tokenize(char *cmdline) {
-    char **arglist = malloc((MAXARGS + 1) * sizeof(char *));
-    int argnum = 0;
-    char *token = strtok(cmdline, " \t\n");
-
-    while (token != NULL && argnum < MAXARGS) {
-        arglist[argnum++] = strdup(token);
-        token = strtok(NULL, " \t\n");
-    }
-    arglist[argnum] = NULL;
-    return arglist;
-}
-
-// Read command from input and print prompt
-char *read_cmd(char *prompt, FILE *fp) {
-    printf("%s", prompt);
-    char *cmdline = malloc(MAX_LEN);
-    if (fgets(cmdline, MAX_LEN, fp) == NULL) return NULL;
-    return cmdline;
 }
