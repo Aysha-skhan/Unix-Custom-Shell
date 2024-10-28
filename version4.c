@@ -24,8 +24,8 @@
 // Function declarations
 int execute(char *arglist[], int background);
 char** tokenize(char* cmdline);
-char* read_cmd(char*, FILE*, char**);
-void parse_redirects_and_pipes(char **args, int *infile, int *outfile, int *is_pipe, char ***cmdlist);
+char* read_cmd(char*, FILE*);
+void parse_redirects_and_pipes(char **args, int *infile, int *outfile, int *is_pipe, char ****cmdlist);
 void handle_sigchld(int sig);
 void add_to_history(char *cmd);
 char* fetch_from_history(char *cmd);
@@ -42,27 +42,30 @@ void handle_sigchld(int sig) {
 
 void add_to_history(char *cmd) {
     if (history[current] != NULL) {
-        free(history[current]);  // Free the slot if it's filled
+        free(history[current]);
     }
-    history[current] = strdup(cmd);  // Copy command to history
-    current = (current + 1) % HIST_SIZE;  // Update current index
+    history[current] = strdup(cmd);
+    current = (current + 1) % HIST_SIZE;
 }
 
 char* fetch_from_history(char *cmd) {
     int index;
     if (cmd[1] == '-') {
-        // Handle negative indices for recent commands
         index = (current + HIST_SIZE - 1) % HIST_SIZE;
     } else {
-        index = atoi(cmd + 1) - 1;  // Convert number and adjust for 0-based index
-        index = index % HIST_SIZE;  // Ensure the index wraps around
+        index = atoi(cmd + 1) - 1;
+        index = index % HIST_SIZE;
     }
-    return history[index];
+    if (history[index] == NULL) {
+        fprintf(stderr, "No command stored in this history slot.\n");
+        return NULL;
+    }
+    return strdup(history[index]);
 }
 
 int main() {
-    signal(SIGCHLD, handle_sigchld);
-    memset(history, 0, sizeof(history));  // Initialize history array
+    signal(SIGCHLD, handle_sigchld);  // Handle background processes
+    memset(history, 0, sizeof(history));
 
     char *cmdline;
     char **arglist;
@@ -76,7 +79,7 @@ int main() {
 
     while (1) {
         if (getcwd(cwd, sizeof(cwd)) != NULL) {
-            snprintf(prompt, sizeof(prompt), 
+            snprintf(prompt, sizeof(prompt),
                 COLOR_RED "PUCITshell " COLOR_RESET 
                 "(" COLOR_GREEN "%s" COLOR_RESET 
                 "@" COLOR_GREEN "%s" COLOR_RESET 
@@ -87,12 +90,18 @@ int main() {
             return 1;
         }
 
-        cmdline = read_cmd(prompt, stdin, history);  // Modified to pass history
+        cmdline = read_cmd(prompt, stdin);
         if (cmdline == NULL) break;
 
         if (cmdline[0] == '!') {
-            cmdline = fetch_from_history(cmdline);
-            printf("Repeating command: %s\n", cmdline);
+            char *newcmd = fetch_from_history(cmdline);
+            free(cmdline);
+            if (newcmd) {
+                cmdline = newcmd;
+                printf("Repeating command: %s\n", cmdline);
+            } else {
+                continue;
+            }
         }
 
         add_to_history(cmdline);
@@ -110,14 +119,14 @@ int main() {
             execute(arglist, background);
             for (int j = 0; j < MAXARGS + 1; j++) free(arglist[j]);
             free(arglist);
-            free(cmdline);
         }
+        free(cmdline);
     }
     printf("\n");
     return 0;
 }
 
-char* read_cmd(char* prompt, FILE* fp, char** history) {
+char* read_cmd(char* prompt, FILE* fp) {
     printf("%s", prompt);
     int c, pos = 0;
     char* cmdline = malloc(MAX_LEN);
@@ -164,74 +173,13 @@ char** tokenize(char* cmdline) {
     return arglist;
 }
 
-int execute(char *arglist[], int background) {
-    int infile = 0, outfile = 1, is_pipe = 0;
-    char **cmdlist[MAXARGS];
-    parse_redirects_and_pipes(arglist, &infile, &outfile, &is_pipe, cmdlist);
+void parse_redirects_and_pipes(char **args, int *infile, int *outfile, int *is_pipe, char ***cmdlist[]) {
+    int cmd_idx = 0;
+    *cmdlist = malloc(MAXARGS * sizeof(char**));
+    (*cmdlist)[cmd_idx] = malloc(MAXARGS * sizeof(char*));
 
-    if (is_pipe) {  // Handle command piping
-        int fd[2];
-        int in = infile;
-        pid_t pid;
-
-        for (int i = 0; cmdlist[i] != NULL; i++) {
-            pipe(fd);
-            if ((pid = fork()) == 0) {  // Child process
-                if (in != STDIN_FILENO) {
-                    dup2(in, STDIN_FILENO);
-                    close(in);
-                }
-                if (cmdlist[i + 1] != NULL) {
-                    dup2(fd[1], STDOUT_FILENO);
-                } else if (outfile != STDOUT_FILENO) {
-                    dup2(outfile, STDOUT_FILENO);
-                    close(outfile);
-                }
-                close(fd[0]);
-                execvp(cmdlist[i][0], cmdlist[i]);
-                perror("Command execution failed");
-                exit(1);
-            }
-            close(fd[1]);
-            in = fd[0];
-        }
-        while (wait(NULL) > 0);  // Wait for all child processes
-    } else {  // Handle simple commands with redirection
-        pid_t pid = fork();
-        if (pid == 0) {  // Child process
-            if (infile != STDIN_FILENO) {
-                dup2(infile, STDIN_FILENO);
-                close(infile);
-            }
-            if (outfile != STDOUT_FILENO) {
-                dup2(outfile, STDOUT_FILENO);
-                close(outfile);
-            }
-            execvp(cmdlist[0][0], cmdlist[0]);
-            perror("Command execution failed");
-            exit(1);
-        } else if (pid > 0) {  // Parent process
-            if (background) {
-                printf("[Background process started with PID %d]\n", pid);
-            } else {
-                waitpid(pid, NULL, 0);  // Wait for child process to finish
-            }
-        } else {
-            perror("Fork failed");
-            return 1;
-        }
-    }
-
-    if (infile != STDIN_FILENO) close(infile);
-    if (outfile != STDOUT_FILENO) close(outfile);
-    return 0;
-}
-
-void parse_redirects_and_pipes(char **args, int *infile, int *outfile, int *is_pipe, char ***cmdlist) {
-    int i, cmd_idx = 0, arg_idx = 0;
-    cmdlist[cmd_idx] = malloc(MAXARGS * sizeof(char*));
-
-    for (i = 0; args[i] != NULL; i++) {
+    int arg_idx = 0;
+    for (int i = 0; args[i] != NULL; i++) {
         if (strcmp(args[i], "<") == 0) {
             *infile = open(args[++i], O_RDONLY);
             if (*infile < 0) {
@@ -245,15 +193,78 @@ void parse_redirects_and_pipes(char **args, int *infile, int *outfile, int *is_p
                 exit(1);
             }
         } else if (strcmp(args[i], "|") == 0) {
-            cmdlist[cmd_idx][arg_idx] = NULL;
+            (*cmdlist)[cmd_idx][arg_idx] = NULL;
             cmd_idx++;
-            cmdlist[cmd_idx] = malloc(MAXARGS * sizeof(char*));
+            (*cmdlist)[cmd_idx] = malloc(MAXARGS * sizeof(char*));
             arg_idx = 0;
             *is_pipe = 1;
         } else {
-            cmdlist[cmd_idx][arg_idx++] = args[i];
+            (*cmdlist)[cmd_idx][arg_idx++] = args[i];
         }
     }
-    cmdlist[cmd_idx][arg_idx] = NULL;
-    cmdlist[cmd_idx + 1] = NULL;
+    (*cmdlist)[cmd_idx][arg_idx] = NULL;
+}
+
+int execute(char *arglist[], int background) {
+    int infile = 0, outfile = 1, is_pipe = 0;
+    char ***cmdlist;
+    parse_redirects_and_pipes(arglist, &infile, &outfile, &is_pipe, &cmdlist);
+
+    if (is_pipe) {
+        int pipefds[2], in = 0;
+
+        for (int i = 0; cmdlist[i] != NULL; i++) {
+            pipe(pipefds);
+            if (fork() == 0) {
+                if (in != 0) {
+                    dup2(in, 0);
+                    close(in);
+                }
+                if (cmdlist[i + 1] != NULL) {
+                    dup2(pipefds[1], 1);
+                } else if (outfile != 1) {
+                    dup2(outfile, 1);
+                }
+                close(pipefds[0]);
+                execvp(cmdlist[i][0], cmdlist[i]);
+                perror("execvp");
+                exit(1);
+            } else {
+                close(pipefds[1]);
+                if (in != 0) close(in);
+                in = pipefds[0];
+            }
+        }
+
+        if (!background) {
+            while (wait(NULL) > 0);
+        }
+    } else {
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (infile != 0) {
+                dup2(infile, 0);
+                close(infile);
+            }
+            if (outfile != 1) {
+                dup2(outfile, 1);
+                close(outfile);
+            }
+            execvp(arglist[0], arglist);
+            perror("execvp");
+            exit(1);
+        } else if (pid > 0) {
+            if (!background) waitpid(pid, NULL, 0);
+        } else {
+            perror("fork");
+            return 1;
+        }
+    }
+
+    for (int i = 0; cmdlist[i] != NULL; i++) {
+        free(cmdlist[i]);
+    }
+    free(cmdlist);
+
+    return 0;
 }
