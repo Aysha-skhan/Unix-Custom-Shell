@@ -27,6 +27,7 @@ int parse_redirects(char **args, int *infile, int *outfile);
 void handle_sigchld(int sig);
 void add_to_history(char *cmd);
 char* fetch_from_history(char *cmd);
+int execute_pipeline(char *commands[][MAXARGS + 1], int n);
 
 // Global variables for history management
 char *history[HIST_SIZE];
@@ -115,21 +116,76 @@ int main() {
 
         if ((arglist = tokenize(cmdline)) != NULL) {
             int background = 0;
+            int pipe_count = 0;
+            char *commands[MAXARGS + 1][MAXARGS + 1] = {NULL};  // To store pipeline segments
+
+            // Split the input into segments for pipeline execution
+            int segment = 0, arg = 0;
             for (int i = 0; arglist[i] != NULL; i++) {
-                if (strcmp(arglist[i], "&") == 0) {
-                    background = 1;
-                    free(arglist[i]);
-                    arglist[i] = NULL;
-                    break;
+                if (strcmp(arglist[i], "|") == 0) {
+                    commands[segment][arg] = NULL;  // End current segment
+                    segment++;
+                    arg = 0;
+                    pipe_count++;
+                } else {
+                    commands[segment][arg++] = arglist[i];
                 }
             }
-            execute(arglist, background);
+            commands[segment][arg] = NULL;  // End last segment
+
+            if (pipe_count > 0) {
+                execute_pipeline(commands, segment + 1);
+            } else {
+                // Handle background processes
+                for (int i = 0; arglist[i] != NULL; i++) {
+                    if (strcmp(arglist[i], "&") == 0) {
+                        background = 1;
+                        free(arglist[i]);
+                        arglist[i] = NULL;
+                        break;
+                    }
+                }
+                execute(arglist, background);
+            }
+
             for (int j = 0; arglist[j] != NULL; j++) free(arglist[j]);
             free(arglist);
         }
         free(cmdline);
     }
     printf("\n");
+    return 0;
+}
+
+int execute_pipeline(char *commands[][MAXARGS + 1], int n) {
+    int pipefd[2], in_fd = STDIN_FILENO;
+    pid_t pid;
+
+    for (int i = 0; i < n; i++) {
+        if (i < n - 1) {
+            pipe(pipefd);  // Create a pipe for all but the last command
+        }
+
+        pid = fork();
+        if (pid == 0) {  // Child process
+            dup2(in_fd, STDIN_FILENO);  // Redirect input from the previous pipe
+            if (i < n - 1) {
+                dup2(pipefd[1], STDOUT_FILENO);  // Redirect output to the next pipe
+            }
+
+            close(pipefd[0]);
+            execvp(commands[i][0], commands[i]);
+            perror("execvp failed");
+            exit(1);
+        } else if (pid > 0) {  // Parent process
+            waitpid(pid, NULL, 0);
+            close(pipefd[1]);
+            in_fd = pipefd[0];  // Set input for next command to the read end of the pipe
+        } else {
+            perror("fork failed");
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -178,53 +234,4 @@ char** tokenize(char* cmdline) {
     }
     arglist[argnum] = NULL;
     return arglist;
-}
-
-int parse_redirects(char **args, int *infile, int *outfile) {
-    for (int i = 0; args[i] != NULL; i++) {
-        if (strcmp(args[i], "<") == 0) {
-            *infile = open(args[i + 1], O_RDONLY);
-            if (*infile < 0) {
-                perror("Failed to open input file");
-                return -1;
-            }
-            args[i] = NULL;
-        } else if (strcmp(args[i], ">") == 0) {
-            *outfile = open(args[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (*outfile < 0) {
-                perror("Failed to open output file");
-                return -1;
-            }
-            args[i] = NULL;
-        }
-    }
-    return 0;
-}
-
-int execute(char *arglist[], int background) {
-    int infile = STDIN_FILENO, outfile = STDOUT_FILENO;
-    if (parse_redirects(arglist, &infile, &outfile) < 0) return 1;
-
-    pid_t pid = fork();
-    if (pid == 0) {  // Child process
-        if (infile != STDIN_FILENO) {
-            dup2(infile, STDIN_FILENO);
-            close(infile);
-        }
-        if (outfile != STDOUT_FILENO) {
-            dup2(outfile, STDOUT_FILENO);
-            close(outfile);
-        }
-        execvp(arglist[0], arglist);
-        perror("execvp failed");
-        exit(1);
-    } else if (pid > 0) {  // Parent process
-        if (!background) {
-            waitpid(pid, NULL, 0);
-        }
-    } else {
-        perror("fork failed");
-        return 1;
-    }
-    return 0;
 }
