@@ -11,17 +11,18 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
-#define MAX_LEN 512
-#define MAXARGS 10
-#define ARGLEN 30
-#define HIST_SIZE 10
+#define MAX_LEN 512          // Maximum length of the command line input
+#define MAXARGS 10           // Maximum number of arguments for a command
+#define ARGLEN 30            // Maximum length of each argument
+#define HIST_SIZE 10         // Number of commands to retain in history
 
+// ANSI color codes to customize shell prompt appearance
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[31m"
 #define COLOR_GREEN   "\033[32m"
 #define COLOR_CYAN    "\033[36m"
 
-// Function prototypes
+// Function declarations
 int execute(char *arglist[], int background);
 int execute_pipeline(char ***cmds, int num_cmds);
 char** tokenize(char* cmdline);
@@ -32,21 +33,22 @@ char* fetch_from_history(char *cmd);
 void setup_signals();
 void handle_builtins(char **arglist);
 
-// Global variables for history and job management
-char *history[HIST_SIZE];
-int current = 0;
-int history_count = 0;
-pid_t background_jobs[MAXARGS];
-int job_count = 0;
+// Global variables for history and background job management
+char *history[HIST_SIZE];       // Array to store command history
+int current = 0;                // Current position in history
+int history_count = 0;          // Number of commands in history
+pid_t background_jobs[MAXARGS]; // Array to store background process IDs
+int job_count = 0;              // Count of background jobs
 
-// Signal handler for reaping background processes
+// Signal handler to clean up completed background processes
 void handle_sigchld(int sig) {
-    int saved_errno = errno;
+    int saved_errno = errno; // Save errno as it may be modified during handling
     pid_t pid;
+    // Loop to reap all finished child processes
     while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
         printf("\n[Background process %d completed]\n", pid);
         fflush(stdout);
-        // Remove the completed job from the list
+        // Remove the completed job from the list of background jobs
         for (int i = 0; i < job_count; i++) {
             if (background_jobs[i] == pid) {
                 for (int j = i; j < job_count - 1; j++) {
@@ -57,41 +59,41 @@ void handle_sigchld(int sig) {
             }
         }
     }
-    errno = saved_errno;
+    errno = saved_errno; // Restore errno to its original state
 }
 
-// Function to add a command to history with history count tracking
+// Adds a command to the history buffer, maintaining a circular buffer
 void add_to_history(char *cmd) {
     if (history[current] != NULL) {
-        free(history[current]);
+        free(history[current]); // Free memory if it already holds a command
     }
-    history[current] = strdup(cmd);
-    current = (current + 1) % HIST_SIZE;
+    history[current] = strdup(cmd); // Duplicate the command for storage
+    current = (current + 1) % HIST_SIZE; // Move to the next slot (circular)
     if (history_count < HIST_SIZE) {
         history_count++;
     }
 }
 
-// Function to fetch a command from history, supporting !N and !-N
+// Fetches a command from history, supporting !N and !-N notation
 char* fetch_from_history(char *cmd) {
-    int index;
+    int index; // Calculated index in the history buffer
     int n;
 
     if (cmd[1] == '-') {
-        n = atoi(cmd + 2); // Get the number after !-
+        // Reverse lookup for !-N notation
+        n = atoi(cmd + 2); // Convert string to integer
         if (n <= 0 || n > history_count) {
             fprintf(stderr, "No such command in history.\n");
             return NULL;
         }
-        // Calculate the index in reverse order
-        index = (current - n + HIST_SIZE) % HIST_SIZE;
+        index = (current - n + HIST_SIZE) % HIST_SIZE; // Get the index
     } else {
-        n = atoi(cmd + 1); // Get the number after !
+        // Forward lookup for !N notation
+        n = atoi(cmd + 1);
         if (n <= 0 || n > history_count) {
             fprintf(stderr, "No such command in history.\n");
             return NULL;
         }
-        // Calculate the index based on the absolute position
         index = (current - history_count + n - 1 + HIST_SIZE) % HIST_SIZE;
     }
 
@@ -100,41 +102,44 @@ char* fetch_from_history(char *cmd) {
         return NULL;
     }
 
-    return strdup(history[index]);
+    return strdup(history[index]); // Return a copy of the command
 }
 
-// Setup signal handling for SIGCHLD
+// Sets up signal handling for SIGCHLD to handle background processes
 void setup_signals() {
     struct sigaction sa;
     sa.sa_handler = handle_sigchld;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
+    sa.sa_flags = SA_RESTART; // Restart system calls if interrupted by SIGCHLD
     sigaction(SIGCHLD, &sa, NULL);
 }
 
-// Execute function with background process handling
+// Executes a command, either in the foreground or background
 int execute(char *arglist[], int background) {
     int infile = STDIN_FILENO, outfile = STDOUT_FILENO;
+    // Handle any input/output redirection
     if (parse_redirects(arglist, &infile, &outfile) < 0) return 1;
 
     pid_t pid = fork();
-    if (pid == 0) {  // Child process
+    if (pid == 0) { // Child process
+        // Set up input redirection if specified
         if (infile != STDIN_FILENO) {
             dup2(infile, STDIN_FILENO);
             close(infile);
         }
+        // Set up output redirection if specified
         if (outfile != STDOUT_FILENO) {
             dup2(outfile, STDOUT_FILENO);
             close(outfile);
         }
-        execvp(arglist[0], arglist);
-        perror("execvp failed");
+        execvp(arglist[0], arglist); // Execute the command
+        perror("execvp failed"); // Error if execvp returns
         exit(1);
-    } else if (pid > 0) {  // Parent process
+    } else if (pid > 0) { // Parent process
         if (!background) {
-            waitpid(pid, NULL, 0);
+            waitpid(pid, NULL, 0); // Wait for foreground process
         } else {
-            background_jobs[job_count++] = pid;
+            background_jobs[job_count++] = pid; // Track background process
             printf("[Background PID %d]\n", pid);
         }
     } else {
@@ -144,48 +149,51 @@ int execute(char *arglist[], int background) {
     return 0;
 }
 
-// Execute a pipeline of commands
+// Executes a pipeline of commands (e.g., cmd1 | cmd2 | cmd3)
 int execute_pipeline(char ***cmds, int num_cmds) {
     int i, in_fd = STDIN_FILENO, fd[2];
     pid_t pid;
 
+    // Loop through each command in the pipeline
     for (i = 0; i < num_cmds; i++) {
         if (pipe(fd) == -1) {
             perror("pipe failed");
             return 1;
         }
 
-        if ((pid = fork()) == 0) {
-            dup2(in_fd, STDIN_FILENO);
+        if ((pid = fork()) == 0) { // Child process
+            dup2(in_fd, STDIN_FILENO); // Input from previous command or stdin
             if (i < num_cmds - 1) {
-                dup2(fd[1], STDOUT_FILENO);
+                dup2(fd[1], STDOUT_FILENO); // Output to the pipe
             }
-            close(fd[0]);
+            close(fd[0]); // Close read end of the pipe
 
+            // Execute the command
             if (cmds[i][0] != NULL) {
                 execvp(cmds[i][0], cmds[i]);
                 perror("execvp failed");
             }
-            exit(1);
-        } else if (pid < 0) {
+            exit(1); // Exit on execvp failure
+        } else if (pid < 0) { // Fork failure
             perror("fork failed");
             return 1;
         }
 
-        close(fd[1]);
-        in_fd = fd[0];
+        close(fd[1]); // Close write end of the pipe
+        in_fd = fd[0]; // Set input for the next command
     }
 
+    // Wait for all commands in the pipeline to finish
     for (i = 0; i < num_cmds; i++) wait(NULL);
     return 0;
 }
 
-// Tokenize function to split command into arguments
+// Tokenizes a command line into arguments, returning an array of arguments
 char** tokenize(char* cmdline) {
     char** arglist = malloc((MAXARGS + 1) * sizeof(char*));
     for (int j = 0; j < MAXARGS + 1; j++) {
         arglist[j] = malloc(ARGLEN);
-        bzero(arglist[j], ARGLEN);
+        bzero(arglist[j], ARGLEN); // Initialize memory to zero
     }
 
     if (cmdline[0] == '\0') return NULL;
@@ -195,8 +203,9 @@ char** tokenize(char* cmdline) {
     char* start;
     int len;
 
+    // Split the command line into tokens
     while (*cp != '\0') {
-        while (*cp == ' ' || *cp == '\t') cp++;
+        while (*cp == ' ' || *cp == '\t') cp++; // Skip whitespace
 
         start = cp;
         len = 0;
@@ -207,24 +216,24 @@ char** tokenize(char* cmdline) {
 
         if (len >= ARGLEN) len = ARGLEN - 1;
 
-        strncpy(arglist[argnum], start, len);
-        arglist[argnum++][len] = '\0';
+        strncpy(arglist[argnum], start, len); // Copy token to arglist
+        arglist[argnum++][len] = '\0'; // Null-terminate the token
     }
-    arglist[argnum] = NULL;
+    arglist[argnum] = NULL; // Null-terminate the argument list
     return arglist;
 }
 
-// Parse redirects for input/output redirection
+// Parses input/output redirection symbols and sets file descriptors
 int parse_redirects(char **args, int *infile, int *outfile) {
     for (int i = 0; args[i] != NULL; i++) {
-        if (strcmp(args[i], "<") == 0) {
+        if (strcmp(args[i], "<") == 0) { // Input redirection
             *infile = open(args[i + 1], O_RDONLY);
             if (*infile < 0) {
                 perror("Failed to open input file");
                 return -1;
             }
             args[i] = NULL;
-        } else if (strcmp(args[i], ">") == 0) {
+        } else if (strcmp(args[i], ">") == 0) { // Output redirection
             *outfile = open(args[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (*outfile < 0) {
                 perror("Failed to open output file");
@@ -236,17 +245,17 @@ int parse_redirects(char **args, int *infile, int *outfile) {
     return 0;
 }
 
-// Handle built-in commands like cd, exit, jobs, kill
+// Handles built-in commands like cd, jobs, kill, and exit
 void handle_builtins(char **arglist) {
-    if (strcmp(arglist[0], "cd") == 0) {
+    if (strcmp(arglist[0], "cd") == 0) { // Change directory
         if (arglist[1] == NULL || chdir(arglist[1]) != 0) {
             perror("cd failed");
         }
-    } else if (strcmp(arglist[0], "jobs") == 0) {
+    } else if (strcmp(arglist[0], "jobs") == 0) { // List background jobs
         for (int i = 0; i < job_count; i++) {
-            if (kill(background_jobs[i], 0) == 0) {
+            if (kill(background_jobs[i], 0) == 0) { // Check if job is active
                 printf("[%d] %d\n", i + 1, background_jobs[i]);
-            } else {  // Remove terminated job
+            } else { // Remove terminated job from list
                 for (int j = i; j < job_count - 1; j++) {
                     background_jobs[j] = background_jobs[j + 1];
                 }
@@ -254,13 +263,12 @@ void handle_builtins(char **arglist) {
                 i--;
             }
         }
-    } else if (strcmp(arglist[0], "kill") == 0) {
+    } else if (strcmp(arglist[0], "kill") == 0) { // Kill a background job
         if (arglist[1]) {
             int job_index = atoi(arglist[1]) - 1;
             if (job_index >= 0 && job_index < job_count) {
                 kill(background_jobs[job_index], SIGKILL);
                 printf("Killed job [%d] %d\n", job_index + 1, background_jobs[job_index]);
-                // Remove killed job from list
                 for (int j = job_index; j < job_count - 1; j++) {
                     background_jobs[j] = background_jobs[j + 1];
                 }
@@ -269,7 +277,7 @@ void handle_builtins(char **arglist) {
         } else {
             printf("Usage: kill [job#]\n");
         }
-    } else if (strcmp(arglist[0], "help") == 0) {
+    } else if (strcmp(arglist[0], "help") == 0) { // Display help message
         printf("Available commands:\n");
         printf("  cd [directory]  - Change directory\n");
         printf("  jobs            - List background jobs\n");
@@ -279,9 +287,10 @@ void handle_builtins(char **arglist) {
     }
 }
 
+// Main function to initialize shell and handle command input
 int main() {
-    setup_signals();
-    memset(history, 0, sizeof(history));
+    setup_signals(); // Set up signal handling for background processes
+    memset(history, 0, sizeof(history)); // Initialize history buffer
 
     char *cmdline;
     char **arglist;
@@ -291,41 +300,45 @@ int main() {
     char *username = getenv("USER");
     if (username == NULL) username = "unknown";
 
-    gethostname(hostname, HOST_NAME_MAX);
+    gethostname(hostname, HOST_NAME_MAX); // Get hostname for prompt
 
+    // Main command loop
     while (1) {
-        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        if (getcwd(cwd, sizeof(cwd)) != NULL) { // Get current directory
             snprintf(prompt, sizeof(prompt),
-                     COLOR_RED "MyShell " COLOR_RESET
+                     COLOR_RED "PucitShell " COLOR_RESET
                      "(" COLOR_GREEN "%s" COLOR_RESET
                      "@" COLOR_GREEN "%s" COLOR_RESET
                      ")-[" COLOR_CYAN "%s" COLOR_RESET "] : ",
-                     username, hostname, cwd);
+                     username, hostname, cwd); // Set prompt
         } else {
             perror("getcwd() error");
             return 1;
         }
 
-        cmdline = readline(prompt);
-        if (cmdline == NULL) break;
+        cmdline = readline(prompt); // Read command input
+        if (cmdline == NULL) break; // Exit if EOF
 
         if (strlen(cmdline) > 0) {
-            add_history(cmdline);
-            add_to_history(cmdline);
-        }
-
-        if (cmdline[0] == '!') {
-            char *newcmd = fetch_from_history(cmdline);
-            if (newcmd) {
-                printf("Repeating command: %s\n", newcmd);
-                free(cmdline);
-                cmdline = newcmd;
+            // Handle history commands like !N and !-N
+            if (cmdline[0] == '!') {
+                char *newcmd = fetch_from_history(cmdline);
+                if (newcmd) {
+                    printf("Repeating command: %s\n", newcmd);
+                    free(cmdline);
+                    cmdline = newcmd; // Replace with actual command
+                    add_history(cmdline);
+                } else {
+                    free(cmdline);
+                    continue;
+                }
             } else {
-                free(cmdline);
-                continue;
+                add_history(cmdline); // Add to readline history
             }
+            add_to_history(cmdline); // Add to custom history
         }
 
+        // Parse the command for pipelines and execute
         char *pipe_cmds[MAXARGS];
         int num_cmds = 0;
         char *token = strtok(cmdline, "|");
@@ -339,6 +352,7 @@ int main() {
             token = strtok(NULL, "|");
         }
 
+        // Handle pipeline execution or a single command
         if (num_cmds > 1) {
             char **cmds[MAXARGS];
             for (int i = 0; i < num_cmds; i++) {
