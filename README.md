@@ -31,7 +31,7 @@ This shell program, `PucitShell`, is fully functional with core features such as
 6. **Signal Handling**:
    - Utilizes `SIGCHLD` to clean up completed background processes automatically.
 
-## Additional Features (if any)
+## Additional Features
 
 - Added color-coded prompt display for an enhanced user experience.
 - Integrated `readline` and `history` libraries for better command line editing and recall functionalities.
