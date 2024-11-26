@@ -4,8 +4,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <limits.h>     // For defining the maximum path length (PATH_MAX)
-#include <pwd.h>        // For retrieving the username
+#include <limits.h>    
+#include <pwd.h>      
 
 #define MAX_LEN 512     // Maximum length of a command input
 #define MAXARGS 10      // Maximum number of arguments allowed
