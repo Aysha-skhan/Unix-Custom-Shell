@@ -9,6 +9,7 @@ This shell program, `PucitShell`, is fully functional with core features such as
 1. **Command Execution**:
    - Executes single commands or applications from the shell with argument support.
    - Supports running commands in the background using `&` at the end.
+   - Can use arrow keys to move among previous commands.
 
 2. **History Management**:
    - Maintains a history of the last 10 commands using a circular buffer.
