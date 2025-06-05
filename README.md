@@ -2,7 +2,7 @@
 
 ## Project Status
 
-This shell program, `PucitShell`, is fully functional with core features such as command execution, background job handling, history management, and pipeline support. Most of the core functionalities are implemented as required, and the shell operates as expected for common usage. 
+`PucitShell`, is fully functional with core features such as command execution, background job handling, history management, and pipeline support. Most of the core functionalities are implemented as required, and the shell operates as expected for common usage. 
 
 ## Implemented Features
 
