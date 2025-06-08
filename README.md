@@ -1,4 +1,4 @@
-# Custom Shell Program - PucitShell
+# Custom Shell - PucitShell
 
 ## Project Status
 
